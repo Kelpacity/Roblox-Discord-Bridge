@@ -27,14 +27,18 @@ app.post('/roblox', (req, res) => {
     const code = req.body.Code;
     const user = req.body.UserID;
     const name = req.body.Name;
+    const time = req.body.Time;
+    const elapse = req.body.Elapsed;
 
     if (!code) return res.status(400).send("Missing 'code' in body.");
     if (!user) return res.status(400).send("Missing 'user' in body.");
+    if (!time) return res.status(400).send("Missing 'time' in body.");
+    if (!Elapsed) return res.status(400).send("Missing 'Elapsed' in body.");
     if (!name) return res.status(400).send("Missing 'name' in body.");
 
     const channel = bot.channels.cache.get(CHANNEL_ID);
     if (channel) {
-      channel.send(`${name} just got a new code: ${code} at smth o'clock. UserID: {${user}}`);
+      channel.send(`${name} {${user}} just got a new code: ${code} at ${time} after ${elapse} seconds`);
     }
     res.sendStatus(200);
 }) 
