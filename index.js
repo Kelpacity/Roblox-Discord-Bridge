@@ -24,30 +24,19 @@ app.get('/', (req, res) => {
 
 // 🌐 Roblox Webhook Handler
 app.post('/roblox', (req, res) => {
-  const message = req.body.message || "No message content";
-  const channel = bot.channels.cache.get(CHANNEL_ID);
-  if (channel) {
-    channel.send(`Roblox Update: ${message}`);
-  }
-  res.sendStatus(200);
-});
-
-app.post('/roblox', (req, res) => {
-    const code = req.body.code;
-    const user = req.body.user;
+    const code = req.body.Code;
+    const user = req.body.UserID;
+    const name = req.body.Name;
 
     if (!code) return res.status(400).send("Missing 'code' in body.");
     if (!user) return res.status(400).send("Missing 'user' in body.");
+    if (!name) return res.status(400).send("Missing 'name' in body.");
 
-    const line = code + "\n";
-    fs.appendFile('codes.txt', line, (err) => {
-        if (err) {
-            console.error("Error writing code:", err);
-            return res.status(500).send("Failed to store code.");
-        }
-        console.log("Code stored:", code);
-        res.status(200).send("Code received and stored.");
-  });
+    const channel = bot.channels.cache.get(CHANNEL_ID);
+    if (channel) {
+      channel.send(`${name} just got a new code: ${code} at smth o'clock. UserID: {${user}}`);
+    }
+    res.sendStatus(200);
 }) 
 
 app.listen(PORT, () => {
