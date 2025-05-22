@@ -18,12 +18,16 @@ const bot = new Client({
   ]
 });
 
+app.get('/', (req, res) => {
+  res.send('Bot + Webhook server is online and ready!');
+});
+
 // 🌐 Roblox Webhook Handler
 app.post('/roblox', (req, res) => {
   const message = req.body.message || "No message content";
   const channel = bot.channels.cache.get(CHANNEL_ID);
   if (channel) {
-    channel.send(`📡 Roblox Update: ${message}`);
+    channel.send(`Roblox Update: ${message}`);
   }
   res.sendStatus(200);
 });
@@ -47,12 +51,12 @@ app.post('/roblox', (req, res) => {
 }) 
 
 app.listen(PORT, () => {
-  console.log(`✅ Webhook server running on http://localhost:${PORT}`);
+  console.log(`Webhook server running on http://localhost:${PORT}`);
 });
 
 // 🤖 Start bot
 bot.once('ready', () => {
-  console.log(`🤖 Logged in as ${bot.user.tag}`);
+  console.log(`Logged in as ${bot.user.tag}`);
 });
 
 bot.login(TOKEN);
