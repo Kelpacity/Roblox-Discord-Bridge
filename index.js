@@ -108,24 +108,28 @@ async function verifyCommand(givenId, givenToken, message) {
 // helper: list all users who have at least one token
 async function fetchCommand(message) {
   const sql = `
-    SELECT DISTINCT user_id, name
-      FROM tokens
-     ORDER BY LOWER(name)
+    SELECT user_id, name
+    FROM tokens
+    GROUP BY user_id, name
+    ORDER BY LOWER(name)
   `;
   try {
     const { rows } = await pool.query(sql);
-    if (rows.length === 0) {
-      return message.reply('No users found in the token system');
+    if (!rows.length) {
+      await message.reply('No users found in the token system');
+      return;
     }
+
     let reply = 'Users with at least one token:\n\n';
     rows.forEach((row, i) => {
       reply += `${i + 1}. ${row.name} (${row.user_id})\n`;
     });
+
     if (reply.length > 2000) reply = reply.slice(0, 1995) + '\n... (truncated)';
-    message.reply(reply);
+    await message.reply(reply);
   } catch (err) {
-    console.error(err);
-    message.reply('Failed to fetch users');
+    console.error('fetchCommand failed:', err);
+    await message.reply('Failed to fetch users');
   }
 }
 
