@@ -1,11 +1,11 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
-const dotenv = require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
-const database = new sqlite3.Database('tokens.db');
+const Database = require('better-sqlite3');
+const database = new Database('tokens.db');
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
@@ -20,136 +20,141 @@ const bot = new Client({
   ]
 });
 
-database.run(`
+// create table if it doesn’t exist
+database.exec(`
   CREATE TABLE IF NOT EXISTS tokens (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT NOT NULL,
-  token TEXT NOT NULL,
-  timestamp TEXT NOT NULL,
-  name TEXT NOT NULL,
-  elapsed_time INTEGER NOT NULL
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL,
+    name TEXT NOT NULL,
+    elapsed_time INTEGER NOT NULL,
+    timestamp TEXT NOT NULL
   )
 `);
 
-function storeToken({userId, token, name, elapsedSeconds, date}) {
-  const store = database.prepare(`
+function storeToken({ userId, token, name, elapsedSeconds, date }) {
+  const stmt = database.prepare(`
     INSERT INTO tokens (user_id, token, name, elapsed_time, timestamp)
     VALUES (?, ?, ?, ?, ?)
   `);
+  try {
+    stmt.run(userId, token, name, elapsedSeconds, date);
+    console.log(`Stored token for ${name} (${userId})`);
+  } catch (err) {
+    console.error('Failed to store token:', err.message);
+  }
+}
 
-  store.run(userId, token, name, elapsedSeconds, date, (err) => {
-    if (err) {
-      console.error("Failed to store token:", err.message);
-    } else {
-      console.log(`Token stored for user ${name} (${userId})`);
-    }
+function getCommand({ givenId, message }) {
+  const stmt = database.prepare(`
+    SELECT name, token, timestamp, elapsed_time
+      FROM tokens
+     WHERE user_id = ?
+     ORDER BY timestamp DESC
+  `);
+  let rows;
+  try {
+    rows = stmt.all(givenId);
+  } catch (err) {
+    console.error(err);
+    return message.reply('Error checking tokens');
+  }
+  if (!rows.length) {
+    return message.reply('User has no tokens');
+  }
+  let reply = `User ${rows[0].name} has ${rows.length} token(s):\n\n`;
+  rows.forEach((row, i) => {
+    reply += `${i + 1}. \`${row.token}\`  ${row.timestamp}  (${row.elapsed_time}s)\n`;
   });
-
-  store.finalize();
+  if (reply.length > 2000) {
+    reply = reply.slice(0, 1995) + '\n... (truncated)';
+  }
+  message.reply(reply);
 }
 
-function getCommand({givenId, message}) {
-  database.all(`SELECT name, token, timestamp, elapsed_time FROM tokens WHERE user_id = ?`, [givenId], (err, rows) => {
-    if (err) {
-      console.error(err);
-      return message.reply("Error checking tokens");
-    }
-
-    if (!rows || rows.length === 0) {
-      return message.reply("User has no tokens");
-    }
-    let reply = ``;
-
-    rows.forEach((row, i) => {
-      if (i == 0) {
-        reply += `User ${row.name} has ${rows.length} token(s):\n\n`;
-      }
-      reply += `**${i + 1}.** \`Token: ${row.token}\`\nDate: ${row.timestamp} after ${row.elapsed_time} seconds\n\n`;
-    });
-
-    if (reply.length >= 2000) {
-      reply = reply.slice(0, 1995) + "\n... (truncated)";
-    }
-    message.reply(reply);
-  })
+function verifyCommand({ givenId, givenToken, message }) {
+  const stmt = database.prepare(`
+    SELECT name, token
+      FROM tokens
+     WHERE user_id = ? AND token = ?
+  `);
+  let row;
+  try {
+    row = stmt.get(givenId, givenToken);
+  } catch (err) {
+    console.error(err);
+    return message.reply('Could not verify user token');
+  }
+  if (row) {
+    message.reply(`Token \`${row.token}\` is valid for user ${row.name}`);
+  } else {
+    message.reply(`Token \`${givenToken}\` is not valid for user ${givenId}`);
+  }
 }
 
-function verifyCommand({givenId, givenToken, message}) {
-  database.get(`SELECT * FROM tokens WHERE user_id = ? and token = ?`, [givenId, givenToken], (err, row) => {
-    if (err) {
-      console.error(err);
-      return message.reply("Could not verify user token");
-    }
-
-    if (row) {
-      message.reply(`Token \`${row.token}\` is a valid token for user: ${row.name}`);
-    } else {
-      message.reply(`Token \`${givenToken}\` is not a valid token for user: ${givenId}`);
-    }
-  })
-}
-
-function fetchCommand({message}) {
-  database.all(`SELECT DISTINCT user_id, name FROM tokens ORDER BY name COLLATE NOCASE`, (err, rows) => {
-    if (err) {
-      console.error(err);
-      return message.reply("Failed to fetch users.");
-    }
-
-    if (!rows || rows.length === 0) {
-      return message.reply("No users found in the token system.");
-    }
-
-    let reply = `Users with at least one token:\n\n`;
-
-    rows.forEach((row, i) => {
-      reply += `**${i + 1}.** ${row.name} (${row.user_id})\n`;
-    });
-
-    if (reply.length >= 2000) {
-      reply = reply.slice(0, 1995) + "\n... (truncated)";
-    }
-    message.reply(reply);
+function fetchCommand({ message }) {
+  const stmt = database.prepare(`
+    SELECT DISTINCT user_id, name
+      FROM tokens
+     ORDER BY name COLLATE NOCASE
+  `);
+  let rows;
+  try {
+    rows = stmt.all();
+  } catch (err) {
+    console.error(err);
+    return message.reply('Failed to fetch users');
+  }
+  if (!rows.length) {
+    return message.reply('No users found in the token system');
+  }
+  let reply = 'Users with at least one token:\n\n';
+  rows.forEach((row, i) => {
+    reply += `${i + 1}. ${row.name} (${row.user_id})\n`;
   });
+  if (reply.length > 2000) {
+    reply = reply.slice(0, 1995) + '\n... (truncated)';
+  }
+  message.reply(reply);
 }
 
 app.get('/', (req, res) => {
   res.send('Bot + Webhook server is online and ready!');
 });
 
-// Roblox Webhook Handler
 app.post('/roblox', (req, res) => {
-    const code = req.body.Code;
-    const user = req.body.UserID;
-    const name = req.body.Name;
-    const time = req.body.Time;
-    const elapse = req.body.Elapsed;
+  const code    = req.body.Code;
+  const user    = req.body.UserID;
+  const name    = req.body.Name;
+  const time    = req.body.Time;
+  const elapse  = req.body.Elapsed;
 
-    if (!code) return res.status(400).send("Missing 'code' in body.");
-    if (!user) return res.status(400).send("Missing 'user' in body.");
-    if (!time) return res.status(400).send("Missing 'time' in body.");
-    if (!elapse) return res.status(400).send("Missing 'elapse' in body.");
-    if (!name) return res.status(400).send("Missing 'name' in body.");
+  if (!code)   return res.status(400).send("Missing 'Code'");
+  if (!user)   return res.status(400).send("Missing 'UserID'");
+  if (!name)   return res.status(400).send("Missing 'Name'");
+  if (!time)   return res.status(400).send("Missing 'Time'");
+  if (!elapse) return res.status(400).send("Missing 'Elapsed'");
 
-    const channel = bot.channels.cache.get(CHANNEL_ID);
-    if (channel) {
-      channel.send(`${name} {${user}} just got a new code: ${code} at ${time} after ${elapse} seconds`);
-    }
-    storeToken({
-      userId: user,
-      token: code,
-      name: name,
-      elapsedSeconds: elapse,
-      date: time
-    })
-    res.sendStatus(200);
-}) 
+  const channel = bot.channels.cache.get(CHANNEL_ID);
+  if (channel) {
+    channel.send(`${name} (${user}) received code \`${code}\` at ${time} after ${elapse}s`);
+  }
 
-app.listen(PORT, () => {
-  console.log(`Webhook server running on http://localhost:${PORT}`);
+  storeToken({
+    userId: user,
+    token: code,
+    name: name,
+    elapsedSeconds: elapse,
+    date: time
+  });
+
+  res.sendStatus(200);
 });
 
-// Start bot
+app.listen(PORT, () => {
+  console.log(`Webhook server running on port ${PORT}`);
+});
+
 bot.once('ready', () => {
   console.log(`Logged in as ${bot.user.tag}`);
 });
@@ -159,40 +164,26 @@ bot.on('messageCreate', (message) => {
   const args = message.content.trim().split(/\s+/);
   const command = args[0].toLowerCase();
 
-  if (command === "!get") {
-    const givenId = args[1];
-    if (!givenId || typeof givenId !== "string" || givenId.trim() === "") {
-       return message.reply("Please provide a valid user");
+  if (command === '!get') {
+    const givenId = args[1] || message.author.id;
+    if (!givenId.trim()) {
+      return message.reply('Please provide a valid user');
     }
-    getCommand({
-      givenId: givenId,
-      message: message
-    });
+    getCommand({ givenId, message });
   }
 
-  if (command === "!verify") {
-    const givenId = args[1];
+  if (command === '!verify') {
+    const givenId = args[1] || message.author.id;
     const givenToken = args[2];
-
-    if (!givenId || typeof givenId !== "string" || givenId.trim() === "") {
-       return message.reply("Please provide a valid user");
+    if (!givenToken) {
+      return message.reply('Please provide a valid token');
     }
-
-    if (!givenToken || typeof givenToken !== "string" || givenToken.trim() === "") {
-       return message.reply("Please provide a valid token");
-    }
-    verifyCommand({
-      givenId: givenId,
-      givenToken: givenToken,
-      message: message
-    });
+    verifyCommand({ givenId, givenToken, message });
   }
 
-  if (command === "!fetch") {
-    fetchCommand({
-      message: message
-    })
+  if (command === '!fetch') {
+    fetchCommand({ message });
   }
-})
+});
 
 bot.login(TOKEN);
