@@ -38,7 +38,7 @@ function storeToken({ userId, token, name, elapsedSeconds, date }) {
     VALUES (?, ?, ?, ?, ?)
   `);
   try {
-    stmt.run(userId, token, name, elapsedSeconds, date);
+    stmt.run(String(userId), String(token), name, elapsedSeconds, date);
     console.log(`Stored token for ${name} (${userId})`);
   } catch (err) {
     console.error('Failed to store token:', err.message);
