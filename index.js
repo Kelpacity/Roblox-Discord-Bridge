@@ -110,7 +110,7 @@ async function fetchCommand(message) {
   const sql = `
     SELECT DISTINCT user_id, name
       FROM tokens
-  ORDER BY name COLLATE NOCASE
+     ORDER BY LOWER(name)
   `;
   try {
     const { rows } = await pool.query(sql);
