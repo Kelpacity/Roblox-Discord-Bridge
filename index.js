@@ -1,14 +1,38 @@
 const { Client, GatewayIntentBits } = require('discord.js');
-const fs = require('fs');
-require('dotenv').config();
 const express = require('express');
-const Database = require('better-sqlite3');
-const database = new Database('tokens.db');
+const { Pool } = require('pg');
+require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
+
+// PostgreSQL connection pool
+const pool = new Pool({
+  connectionString: process.env.PG_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+// Create tokens table if it doesn’t exist
+(async () => {
+  const createTable = `
+    CREATE TABLE IF NOT EXISTS tokens (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      name TEXT NOT NULL,
+      elapsed_time INTEGER NOT NULL,
+      timestamp TEXT NOT NULL
+    );
+  `;
+  try {
+    await pool.query(createTable);
+    console.log('Ensured tokens table exists');
+  } catch (err) {
+    console.error('Error creating tokens table:', err);
+  }
+})();
 
 app.use(express.json());
 
@@ -20,115 +44,97 @@ const bot = new Client({
   ]
 });
 
-// create table if it doesn’t exist
-database.exec(`
-  CREATE TABLE IF NOT EXISTS tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    token TEXT NOT NULL,
-    name TEXT NOT NULL,
-    elapsed_time INTEGER NOT NULL,
-    timestamp TEXT NOT NULL
-  )
-`);
-
-function storeToken({ userId, token, name, elapsedSeconds, date }) {
-  const stmt = database.prepare(`
+// helper: store a token record
+async function storeToken({ userId, token, name, elapsedSeconds, date }) {
+  const sql = `
     INSERT INTO tokens (user_id, token, name, elapsed_time, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `);
+    VALUES ($1, $2, $3, $4, $5)
+  `;
   try {
-    stmt.run(String(userId), String(token), name, elapsedSeconds, date);
+    await pool.query(sql, [String(userId), token, name, elapsedSeconds, date]);
     console.log(`Stored token for ${name} (${userId})`);
   } catch (err) {
     console.error('Failed to store token:', err.message);
   }
 }
 
-function getCommand({ givenId, message }) {
-  const stmt = database.prepare(`
+// helper: reply with all tokens for a user
+async function getCommand(givenId, message) {
+  const sql = `
     SELECT name, token, timestamp, elapsed_time
       FROM tokens
-     WHERE user_id = ?
-     ORDER BY timestamp DESC
-  `);
-  let rows;
+     WHERE user_id = $1
+  ORDER BY timestamp DESC
+  `;
   try {
-    rows = stmt.all(givenId);
+    const { rows } = await pool.query(sql, [String(givenId)]);
+    if (rows.length === 0) {
+      return message.reply('User has no tokens');
+    }
+    let reply = `User ${rows[0].name} has ${rows.length} token(s):\n\n`;
+    for (let i = 0; i < rows.length; i++) {
+      const { token, timestamp, elapsed_time } = rows[i];
+      reply += `${i + 1}. \`${token}\`  ${timestamp}  (${elapsed_time}s)\n`;
+    }
+    if (reply.length > 2000) reply = reply.slice(0, 1995) + '\n... (truncated)';
+    message.reply(reply);
   } catch (err) {
     console.error(err);
-    return message.reply('Error checking tokens');
+    message.reply('Error checking tokens');
   }
-  if (!rows.length) {
-    return message.reply('User has no tokens');
-  }
-  let reply = `User ${rows[0].name} has ${rows.length} token(s):\n\n`;
-  rows.forEach((row, i) => {
-    reply += `${i + 1}. \`${row.token}\`  ${row.timestamp}  (${row.elapsed_time}s)\n`;
-  });
-  if (reply.length > 2000) {
-    reply = reply.slice(0, 1995) + '\n... (truncated)';
-  }
-  message.reply(reply);
 }
 
-function verifyCommand({ givenId, givenToken, message }) {
-  const stmt = database.prepare(`
+// helper: verify a specific token for a user
+async function verifyCommand(givenId, givenToken, message) {
+  const sql = `
     SELECT name, token
       FROM tokens
-     WHERE user_id = ? AND token = ?
-  `);
-  let row;
+     WHERE user_id = $1
+       AND token = $2
+  `;
   try {
-    row = stmt.get(givenId, givenToken);
+    const { rows } = await pool.query(sql, [String(givenId), givenToken]);
+    if (rows.length > 0) {
+      message.reply(`Token \`${rows[0].token}\` is valid for user ${rows[0].name}`);
+    } else {
+      message.reply(`Token \`${givenToken}\` is not valid for user ${givenId}`);
+    }
   } catch (err) {
     console.error(err);
-    return message.reply('Could not verify user token');
-  }
-  if (row) {
-    message.reply(`Token \`${row.token}\` is valid for user ${row.name}`);
-  } else {
-    message.reply(`Token \`${givenToken}\` is not valid for user ${givenId}`);
+    message.reply('Could not verify user token');
   }
 }
 
-function fetchCommand({ message }) {
-  const stmt = database.prepare(`
+// helper: list all users who have at least one token
+async function fetchCommand(message) {
+  const sql = `
     SELECT DISTINCT user_id, name
       FROM tokens
-     ORDER BY name COLLATE NOCASE
-  `);
-  let rows;
+  ORDER BY name COLLATE NOCASE
+  `;
   try {
-    rows = stmt.all();
+    const { rows } = await pool.query(sql);
+    if (rows.length === 0) {
+      return message.reply('No users found in the token system');
+    }
+    let reply = 'Users with at least one token:\n\n';
+    rows.forEach((row, i) => {
+      reply += `${i + 1}. ${row.name} (${row.user_id})\n`;
+    });
+    if (reply.length > 2000) reply = reply.slice(0, 1995) + '\n... (truncated)';
+    message.reply(reply);
   } catch (err) {
     console.error(err);
-    return message.reply('Failed to fetch users');
+    message.reply('Failed to fetch users');
   }
-  if (!rows.length) {
-    return message.reply('No users found in the token system');
-  }
-  let reply = 'Users with at least one token:\n\n';
-  rows.forEach((row, i) => {
-    reply += `${i + 1}. ${row.name} (${row.user_id})\n`;
-  });
-  if (reply.length > 2000) {
-    reply = reply.slice(0, 1995) + '\n... (truncated)';
-  }
-  message.reply(reply);
 }
 
 app.get('/', (req, res) => {
   res.send('Bot + Webhook server is online and ready!');
 });
 
-app.post('/roblox', (req, res) => {
-  const code    = req.body.Code;
-  const user    = req.body.UserID;
-  const name    = req.body.Name;
-  const time    = req.body.Time;
-  const elapse  = req.body.Elapsed;
-
+app.post('/roblox', async (req, res) => {
+  const { Code: code, UserID: user, Name: name, Time: time, Elapsed: elapse } = req.body;
   if (!code)   return res.status(400).send("Missing 'Code'");
   if (!user)   return res.status(400).send("Missing 'UserID'");
   if (!name)   return res.status(400).send("Missing 'Name'");
@@ -140,11 +146,11 @@ app.post('/roblox', (req, res) => {
     channel.send(`${name} (${user}) received code \`${code}\` at ${time} after ${elapse}s`);
   }
 
-  storeToken({
+  await storeToken({
     userId: user,
     token: code,
-    name: name,
-    elapsedSeconds: elapse,
+    name,
+    elapsedSeconds: parseInt(elapse, 10),
     date: time
   });
 
@@ -159,7 +165,7 @@ bot.once('ready', () => {
   console.log(`Logged in as ${bot.user.tag}`);
 });
 
-bot.on('messageCreate', (message) => {
+bot.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const args = message.content.trim().split(/\s+/);
   const command = args[0].toLowerCase();
@@ -169,7 +175,7 @@ bot.on('messageCreate', (message) => {
     if (!givenId.trim()) {
       return message.reply('Please provide a valid user');
     }
-    getCommand({ givenId, message });
+    await getCommand(givenId, message);
   }
 
   if (command === '!verify') {
@@ -178,11 +184,11 @@ bot.on('messageCreate', (message) => {
     if (!givenToken) {
       return message.reply('Please provide a valid token');
     }
-    verifyCommand({ givenId, givenToken, message });
+    await verifyCommand(givenId, givenToken, message);
   }
 
   if (command === '!fetch') {
-    fetchCommand({ message });
+    await fetchCommand(message);
   }
 });
 
