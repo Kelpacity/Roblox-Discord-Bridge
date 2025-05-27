@@ -59,19 +59,19 @@ async function storeToken({ userId, token, name, elapsedSeconds, date }) {
 }
 
 // helper: remove a token record
-async function removeToken({ userId, token}) {
+async function removeToken({ userId, token, message }) {
   const sql = `
     DELETE FROM tokens
     WHERE user_id = $1 AND token = $2
     RETURNING *;
   `;
   try {
-    const { rows } = await pool.query(sql, [String(givenId), givenToken]);
+    const { rows } = await pool.query(sql, [String(userId), token]);
 
     if (rows.length > 0) {
-      await message.reply(`Token \`${givenToken}\` was removed for user ${rows[0].name}`);
+      await message.reply(`Token \`${token}\` was removed for user ${rows[0].name}`);
     } else {
-      await message.reply(`No matching token found for user ${givenId}`);
+      await message.reply(`No matching token found for user ${userId}`);
     }
   } catch (err) {
     console.error(err);
@@ -197,7 +197,7 @@ bot.on('messageCreate', async (message) => {
 
   if (command === '!get') {
     const givenId = args[1];
-    if (!givenId.trim()) {
+    if (!givenId || !givenId.trim()) {
       return message.reply('Please provide a valid user');
     }
     await getCommand(givenId, message);
@@ -224,7 +224,11 @@ bot.on('messageCreate', async (message) => {
       return message.reply('Please provide a valid token');
     }
 
-    await removeToken(givenId, givenToken, message);
+    await removeToken({
+      userId: givenId, 
+      token: givenToken, 
+      message: message
+    });
   }
 });
 
